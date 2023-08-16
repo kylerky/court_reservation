@@ -22,6 +22,8 @@ import fs2.data.json.circe._
 import io.circe.generic.auto._
 import io.circe.syntax._
 
+import com.github.nscala_time.time.Imports._
+
 given logger: SelfAwareStructuredLogger[IO] = Slf4jFactory.create[IO].getLogger
 
 case class Config(
@@ -49,6 +51,8 @@ object Main extends IOApp.Simple:
       .compile
       .last
 
+  val dateFormat = DateTimeFormat.forPattern("yyyy-MM-dd")
+
   val run =
     for
       maybeConfig <- getConfig
@@ -60,6 +64,6 @@ object Main extends IOApp.Simple:
         .build
         .use { c =>
           given client: Client[IO] = c
-          Query(config).query[IO]("2023-08-19")
+          Query(config).query[IO](dateFormat.print(DateTime.now() + 7.days))
         }
     yield ()

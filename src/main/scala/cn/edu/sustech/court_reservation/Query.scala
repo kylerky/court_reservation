@@ -70,15 +70,80 @@ case class MessageHookData(courts: Seq[MessageHookEntity])
 case class MessageHookEntity(name: String, slots: Seq[String])
 
 case class QueryConfig(baseUri: Uri, messageHookUri: Uri, vars: QueryConfigVars)
-case class QueryConfigVars(queryUserId: String, gymId: String)
+case class QueryConfigVars(
+    targetCourts: Seq[String],
+    reserveUserId: String,
+    queryUserId: String,
+    gymId: String,
+    gymName: String,
+    customerTel: String,
+    customerId: String,
+    userNum: String,
+    customerName: String,
+    startTimeClock: String,
+    endTimeClock: String
+)
+case class ReservationResponseData()
 
 case class Query(config: QueryConfig):
   val baseUri = config.baseUri
   val queryUserId = config.vars.queryUserId
+  val reserveUserId = config.vars.reserveUserId
   val gymId = config.vars.gymId
   val apiPath = baseUri / "api" / "blade-app" / "qywx"
   val courtListReqName = "getAppGroundPageByGymId"
   val courtTimeReqName = "getOrderTimeConfigList"
+
+  def reserve[F[_]: Async: Logger: Parallel](reservationDate: String)(using
+      client: Client[F]
+  ): F[Unit] =
+    for
+      courts <- getCourtList(queryUserId, gymId)
+      targets <- Monad[F].pure(
+        courts.data.records
+          .filter { r =>
+            config.vars.targetCourts.contains(r.name)
+          }
+          .map { r => (r.name, r.id) }
+      )
+      _ <- targets.map { t =>
+        reserveEach(reservationDate, t._1, t._2)
+      }.parSequence
+    yield ()
+
+  def reserveEach[F[_]: Async: Logger: Parallel](
+      reservationDate: String,
+      courtName: String,
+      courtId: String
+  )(using
+      client: Client[F]
+  ): F[Unit] =
+    val reservePath = apiPath / "saveOrder"
+    val reservePathWithParams =
+      reservePath.withQueryParam("userid", reserveUserId)
+    val startTime = s"${reservationDate} ${config.vars.startTimeClock}"
+    val endTime = s"${reservationDate} ${config.vars.endTimeClock}"
+    val req = Request[F](method = Method.POST, uri = reservePathWithParams)
+      .withEntity(json"""{
+               "customerEmail": "",
+               "customerId": ${config.vars.customerId},
+               "customerName": ${config.vars.customerName},
+               "customerTel": ${config.vars.customerTel},
+               "groundId": ${courtId},
+               "groundName": ${courtName},
+               "groundType": "0",
+               "gymId": $gymId,
+               "gymName": ${config.vars.gymName},
+               "isIllegal": "0",
+               "messagePushType": "0",
+               "startTime": ${startTime},
+               "tmpStartTime": ${startTime},
+               "endTime": ${endTime},
+               "tmpEndTime": ${endTime},
+               "orderDate": ${startTime},
+               "tmpOrderDate": ${startTime},
+               "userNum": ${config.vars.userNum}}""")
+    client.expect[Response[ReservationResponseData]](req).as(())
 
   def query[F[_]: Async: Logger: Parallel](startTime: String)(using
       client: Client[F]
@@ -93,8 +158,7 @@ case class Query(config: QueryConfig):
         extractCourtTimeSlots(startTime, endTime, queryUserId, courtMap)(r.id)
       }.parSequence
       goodSlots <- Monad[F].pure(timeSlots.filter(s => s._2.length != 0))
-      _ <- info"$goodSlots"
-    // _ <- sendNotification(startTime, goodSlots)
+      _ <- sendNotification(startTime, goodSlots)
     yield ()
 
   def getCourtList[F[_]: Async: Logger](userId: String, gymId: String)(using
