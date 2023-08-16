@@ -1,0 +1,7 @@
+project/
+/target
+.metals/
+.bsp/
+.bloop/
+
+/*.json
