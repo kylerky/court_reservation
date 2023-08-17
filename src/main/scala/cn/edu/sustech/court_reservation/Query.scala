@@ -95,6 +95,7 @@ case class QueryConfigVars(
     startTime: String,
     endTime: String,
     enableMessageHook: Boolean,
+    emptyResultSend: Boolean,
     emptyResultMessage: String,
     defaultDaysToPlus: Int
 )
@@ -257,7 +258,9 @@ case class Query(config: QueryConfig):
     val prelude =
       s"${startDate} ${config.vars.goodFirstHour}-${config.vars.goodLastHour}\n"
     val message = slots.isEmpty match
-      case true => s"${prelude}${config.vars.emptyResultMessage}"
+      case true =>
+        if !config.vars.emptyResultSend then return Monad[F].pure(())
+        s"${prelude}${config.vars.emptyResultMessage}"
       case false =>
         s"${prelude}" + slots
           .map { (court, slots) =>
