@@ -20,6 +20,8 @@ import io.circe.generic.auto._
 import io.circe._
 import io.circe.syntax._
 import io.circe.literal._
+import scala.util.Try
+import scala.util.Success
 
 case class Response[T](
     code: Int,
@@ -40,13 +42,16 @@ case class TimeSlot(
     customerTel: Option[String],
     clientType: Option[String]
 ):
-  val goodTimeSlots = (18 to 22).map(_.toString()).toVector
+  val goodTimeSlots = (0 to 24).map(_.toString()).toVector
   def isAvailable: Boolean =
     status == 1
-  def isGoodTime: Boolean =
+  def isTimeBetween(first: Int, last: Int): Boolean =
     val splits = time.split(":")
     if splits.length != 2 then false
-    else goodTimeSlots.contains(splits(0))
+    else
+      Try(splits(0).toInt) match
+        case Success(t) => (first to last).contains(t)
+        case _          => false
 
 given timeSlotJsonDecoder: Decoder[TimeSlot] = Decoder.forProduct8(
   "time",
@@ -72,6 +77,8 @@ case class MessageHookEntity(name: String, slots: Seq[String])
 case class QueryConfig(baseUri: Uri, messageHookUri: Uri, vars: QueryConfigVars)
 case class QueryConfigVars(
     targetCourts: Seq[String],
+    goodFirstHour: Int,
+    goodLastHour: Int,
     reserveUserId: String,
     reserveHour: Int,
     reserveMinute: Int,
@@ -87,6 +94,7 @@ case class QueryConfigVars(
     customerName: String,
     startTime: String,
     endTime: String,
+    enableMessageHook: Boolean,
     defaultDaysToPlus: Int
 )
 case class ReservationResponseData()
@@ -163,7 +171,10 @@ case class Query(config: QueryConfig):
         extractCourtTimeSlots(startTime, endTime, queryUserId, courtMap)(r.id)
       }
       goodSlots = timeSlots.filter(s => s._2.length != 0)
-      _ <- sendNotification(startTime, goodSlots)
+      _ <-
+        if config.vars.enableMessageHook then
+          sendNotification(startTime, goodSlots)
+        else Monad[F].pure(())
     yield ()
 
   def getCourtList[F[_]: Async: Logger](userId: String, gymId: String)(using
@@ -204,7 +215,9 @@ case class Query(config: QueryConfig):
       .map { (id, slots) =>
         (
           courtMap(id),
-          slots.get(0).getOrElse(Seq.empty).filter { _.isGoodTime }
+          slots.get(0).getOrElse(Seq.empty).filter {
+            _.isTimeBetween(config.vars.goodFirstHour, config.vars.goodLastHour)
+          }
         )
       }
 
