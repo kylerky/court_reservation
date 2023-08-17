@@ -61,13 +61,13 @@ object Main extends IOApp:
         RuntimeException("Cannot load the configuration")
       )
       isQuery <- args.get(0).getOrElse("-q") match {
-        case "-q" => IO.pure(true)
-        case "-r" => IO.pure(false)
+        case "-q" => true.pure[IO]
+        case "-r" => false.pure[IO]
         case o    => IO.raiseError(RuntimeException(s"unknown option ${o}"))
       }
       daysToPlus <- args.get(1) match {
         case Some(days) => IO.fromTry(Try(days.toInt))
-        case None       => IO.pure(config.vars.defaultDaysToPlus)
+        case None       => config.vars.defaultDaysToPlus.pure[IO]
       }
       _ <- EmberClientBuilder
         .default[IO]

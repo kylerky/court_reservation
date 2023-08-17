@@ -101,6 +101,8 @@ case class QueryConfigVars(
 )
 case class ReservationResponseData()
 
+case class FailToReserveError() extends Throwable
+
 case class Query(config: QueryConfig):
   val baseUri = config.baseUri
   val queryUserId = config.vars.queryUserId
@@ -120,10 +122,18 @@ case class Query(config: QueryConfig):
           config.vars.targetCourts.contains(r.name)
         }
         .map { r => (r.name, r.id) }
-      _ <- targets.parTraverse { t =>
-        reserveEach(reservationDate, t._1, t._2)
-          .handleErrorWith(e => error"$e" >> Monad[F].pure(()))
+      nameResRev <- targets.parFoldMapA { t =>
+        reserveEach(reservationDate, t._1, t._2).attempt.map {
+          _.swap.map { List(_) }
+        }
       }
+      nameRes <- nameResRev.swap match
+        case Left(errs) =>
+          errs.traverse { e => warn"$e" } >> Async[F].raiseError(
+            FailToReserveError()
+          )
+        case Right(value) => value.pure[F]
+      _ <- info"Reserved $nameRes"
     yield ()
 
   def reserveEach[F[_]: Async: Logger: Parallel](
@@ -132,7 +142,7 @@ case class Query(config: QueryConfig):
       courtId: String
   )(using
       client: Client[F]
-  ): F[Unit] =
+  ): F[String] =
     val reservePath = apiPath / "saveOrder"
     val reservePathWithParams =
       reservePath.withQueryParam("userid", reserveUserId)
@@ -158,7 +168,7 @@ case class Query(config: QueryConfig):
                "orderDate": ${startTime},
                "tmpOrderDate": ${startTime},
                "userNum": ${config.vars.userNum}}""")
-    client.expect[Response[ReservationResponseData]](req).as(())
+    client.expect[Response[ReservationResponseData]](req).as(courtName)
 
   def query[F[_]: Async: Logger: Parallel](startDate: String)(using
       client: Client[F]
@@ -176,7 +186,7 @@ case class Query(config: QueryConfig):
       _ <-
         if config.vars.enableMessageHook then
           sendNotification(startDate, goodSlots)
-        else Monad[F].pure(())
+        else ().pure[F]
     yield ()
 
   def getCourtList[F[_]: Async: Logger](userId: String, gymId: String)(using
@@ -259,7 +269,7 @@ case class Query(config: QueryConfig):
       s"${startDate} ${config.vars.goodFirstHour}-${config.vars.goodLastHour}\n"
     val message = slots.isEmpty match
       case true =>
-        if !config.vars.emptyResultSend then return Monad[F].pure(())
+        if !config.vars.emptyResultSend then return ().pure[F]
         s"${prelude}${config.vars.emptyResultMessage}"
       case false =>
         s"${prelude}" + slots
