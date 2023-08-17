@@ -95,6 +95,7 @@ case class QueryConfigVars(
     startTime: String,
     endTime: String,
     enableMessageHook: Boolean,
+    emptyResultMessage: String,
     defaultDaysToPlus: Int
 )
 case class ReservationResponseData()
@@ -158,22 +159,22 @@ case class Query(config: QueryConfig):
                "userNum": ${config.vars.userNum}}""")
     client.expect[Response[ReservationResponseData]](req).as(())
 
-  def query[F[_]: Async: Logger: Parallel](startTime: String)(using
+  def query[F[_]: Async: Logger: Parallel](startDate: String)(using
       client: Client[F]
   ): F[Unit] =
-    val endTime = startTime
+    val endDate = startDate
     for
       courts <- getCourtList(queryUserId, gymId)
       courtMap = Map.from(
         courts.data.records.map(_.id).zip(courts.data.records)
       )
       timeSlots <- courts.data.records.parTraverse { r =>
-        extractCourtTimeSlots(startTime, endTime, queryUserId, courtMap)(r.id)
+        extractCourtTimeSlots(startDate, endDate, queryUserId, courtMap)(r.id)
       }
       goodSlots = timeSlots.filter(s => s._2.length != 0)
       _ <-
         if config.vars.enableMessageHook then
-          sendNotification(startTime, goodSlots)
+          sendNotification(startDate, goodSlots)
         else Monad[F].pure(())
     yield ()
 
@@ -250,15 +251,20 @@ case class Query(config: QueryConfig):
     }
 
   def sendNotification[F[_]: Async](
-      startTime: String,
+      startDate: String,
       slots: Seq[(CourtInfo, Seq[TimeSlot])]
   )(using client: Client[F]): F[Unit] =
-    if slots.isEmpty then return Monad[F].pure(())
-    val message = s"$startTime\n" + slots
-      .map { (court, slots) =>
-        s"${court.name}: " + slots.map { _.time }.mkString(",")
-      }
-      .mkString("\n")
+    val prelude =
+      s"${startDate} ${config.vars.goodFirstHour}-${config.vars.goodLastHour}\n"
+    val message = slots.isEmpty match
+      case true => s"${prelude}${config.vars.emptyResultMessage}"
+      case false =>
+        s"${prelude}" + slots
+          .map { (court, slots) =>
+            s"${court.name}: " + slots.map { _.time }.mkString(",")
+          }
+          .mkString("\n")
+
     val req = Request[F](
       method = Method.POST,
       uri = config.messageHookUri
