@@ -84,6 +84,9 @@ object Main extends IOApp:
   def reserve(today: LocalDate, targetDay: LocalDate, config: QueryConfig)(using
       Client[IO]
   ): IO[Unit] =
+    val repeatOffsets = (0 to config.vars.repeatCount - 1).map {
+      _.millis * config.vars.repeatOffsetInMillis
+    }.toList
     val reserveTime = LocalDateTime.of(
       today,
       LocalTime.of(
@@ -99,5 +102,9 @@ object Main extends IOApp:
         .between(Instant.now, reserveInstant)
         .toNanos()
         .nanos + config.vars.reserveClockOffsetInMillis.millis
-    Temporal[IO].sleep(sleepDuration) >>
-      Query(config).reserve[IO](targetDay.show)
+    repeatOffsets
+      .parFoldMapA { t =>
+        Temporal[IO].sleep(t + sleepDuration) *>
+          Query(config).reserve[IO](targetDay.show)
+      }
+      .as(())

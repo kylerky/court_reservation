@@ -84,6 +84,8 @@ case class QueryConfigVars(
     reserveMinute: Int,
     reserveSecond: Int,
     reserveClockOffsetInMillis: Long,
+    repeatCount: Int,
+    repeatOffsetInMillis: Int,
     zoneOffsetOfHours: Int,
     queryUserId: String,
     gymId: String,
@@ -114,7 +116,7 @@ case class Query(config: QueryConfig):
 
   def reserve[F[_]: Async: Logger: Parallel](reservationDate: String)(using
       client: Client[F]
-  ): F[Unit] =
+  ): F[Either[String, Unit]] =
     for
       courts <- getCourtList(queryUserId, gymId)
       targets = courts.data.records
@@ -129,12 +131,12 @@ case class Query(config: QueryConfig):
       }
       nameRes <- nameResRev.swap match
         case Left(errs) =>
-          errs.traverse { e => warn"$e" } >> Async[F].raiseError(
+          errs.traverse { e => warn"$e" } *> Async[F].raiseError(
             FailToReserveError()
           )
         case Right(value) => value.pure[F]
       _ <- info"Reserved $nameRes"
-    yield ()
+    yield Left(nameRes)
 
   def reserveEach[F[_]: Async: Logger: Parallel](
       reservationDate: String,
