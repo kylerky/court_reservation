@@ -7,7 +7,7 @@ val LogbackVersion = "1.4.11"
 val ParadiseVersion = "2.1.0"
 val Fs2Version = "3.8.0"
 val Fs2DataJsonCirceVersion = "1.8.0"
-val NScalaTimeVersion = "2.32.0"
+val CatsTimeVersion = "0.5.1"
 
 lazy val root = (project in file("."))
   .settings(
@@ -29,8 +29,8 @@ lazy val root = (project in file("."))
       "co.fs2" %% "fs2-core" % Fs2Version,
       "co.fs2" %% "fs2-io" % Fs2Version,
       "org.gnieh" %% "fs2-data-json-circe" % Fs2DataJsonCirceVersion,
-      "ch.qos.logback" % "logback-classic" % LogbackVersion,
-      "com.github.nscala-time" %% "nscala-time" % NScalaTimeVersion,
+      "org.typelevel" %% "cats-time" % CatsTimeVersion,
+      "ch.qos.logback" % "logback-classic" % LogbackVersion
     ),
     assembly / assemblyMergeStrategy := {
       case "module-info.class" => MergeStrategy.discard

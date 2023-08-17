@@ -1,9 +1,13 @@
 package cn.edu.sustech.court_reservation
 
-import cats.effect.{IO, IOApp}
-import cats.syntax._
+import cats.effect.{IO, IOApp, ExitCode, Temporal}
+import cats.syntax.all._
 import org.typelevel.log4cats.slf4j._
 import org.typelevel.log4cats._
+import org.typelevel.cats.time._
+
+import java.time._
+import scala.concurrent.duration._
 
 import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.syntax.all._
@@ -21,8 +25,7 @@ import fs2.data.json.circe._
 
 import io.circe.generic.auto._
 import io.circe.syntax._
-
-import com.github.nscala_time.time.Imports._
+import scala.util.Try
 
 given logger: SelfAwareStructuredLogger[IO] = Slf4jFactory.create[IO].getLogger
 
@@ -32,7 +35,7 @@ case class Config(
     vars: QueryConfigVars
 )
 
-object Main extends IOApp.Simple:
+object Main extends IOApp:
   val defaultFs = FileSystems.getDefault()
   val configPath = Path.fromFsPath(defaultFs, "court_reservation.json")
 
@@ -51,19 +54,50 @@ object Main extends IOApp.Simple:
       .compile
       .last
 
-  val dateFormat = DateTimeFormat.forPattern("yyyy-MM-dd")
-
-  val run =
+  override def run(args: List[String]): IO[ExitCode] =
     for
       maybeConfig <- getConfig
       config <- IO.fromOption(maybeConfig)(
         RuntimeException("Cannot load the configuration")
       )
+      isQuery <- args.get(0).getOrElse("-q") match {
+        case "-q" => IO.pure(true)
+        case "-r" => IO.pure(false)
+        case o    => IO.raiseError(RuntimeException(s"unknown option ${o}"))
+      }
+      daysToPlus <- args.get(1) match {
+        case Some(days) => IO.fromTry(Try(days.toInt))
+        case None       => IO.pure(config.vars.defaultDaysToPlus)
+      }
       _ <- EmberClientBuilder
         .default[IO]
         .build
         .use { c =>
           given client: Client[IO] = c
-          Query(config).query[IO](dateFormat.print(DateTime.now() + 7.days))
+          val today = LocalDate.now
+          val targetDay = today.plusDays(daysToPlus)
+          if isQuery then Query(config).query[IO](targetDay.show)
+          else reserve(today, targetDay, config)
         }
-    yield ()
+    yield ExitCode.Success
+
+  def reserve(today: LocalDate, targetDay: LocalDate, config: QueryConfig)(using
+      Client[IO]
+  ): IO[Unit] =
+    val reserveTime = LocalDateTime.of(
+      today,
+      LocalTime.of(
+        config.vars.reserveHour,
+        config.vars.reserveMinute,
+        config.vars.reserveSecond
+      )
+    )
+    val reserveInstant =
+      reserveTime.toInstant(ZoneOffset.ofHours(config.vars.zoneOffsetOfHours))
+    val sleepDuration =
+      java.time.Duration
+        .between(Instant.now, reserveInstant)
+        .toNanos()
+        .nanos + config.vars.reserveClockOffsetInMillis.millis
+    Temporal[IO].sleep(sleepDuration) >>
+      Query(config).reserve[IO](targetDay.show)

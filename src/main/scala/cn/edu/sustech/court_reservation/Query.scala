@@ -73,6 +73,11 @@ case class QueryConfig(baseUri: Uri, messageHookUri: Uri, vars: QueryConfigVars)
 case class QueryConfigVars(
     targetCourts: Seq[String],
     reserveUserId: String,
+    reserveHour: Int,
+    reserveMinute: Int,
+    reserveSecond: Int,
+    reserveClockOffsetInMillis: Long,
+    zoneOffsetOfHours: Int,
     queryUserId: String,
     gymId: String,
     gymName: String,
@@ -80,8 +85,9 @@ case class QueryConfigVars(
     customerId: String,
     userNum: String,
     customerName: String,
-    startTimeClock: String,
-    endTimeClock: String
+    startTime: String,
+    endTime: String,
+    defaultDaysToPlus: Int
 )
 case class ReservationResponseData()
 
@@ -99,16 +105,15 @@ case class Query(config: QueryConfig):
   ): F[Unit] =
     for
       courts <- getCourtList(queryUserId, gymId)
-      targets <- Monad[F].pure(
-        courts.data.records
-          .filter { r =>
-            config.vars.targetCourts.contains(r.name)
-          }
-          .map { r => (r.name, r.id) }
-      )
-      _ <- targets.map { t =>
+      targets = courts.data.records
+        .filter { r =>
+          config.vars.targetCourts.contains(r.name)
+        }
+        .map { r => (r.name, r.id) }
+      _ <- targets.parTraverse { t =>
         reserveEach(reservationDate, t._1, t._2)
-      }.parSequence
+          .handleErrorWith(e => error"$e" >> Monad[F].pure(()))
+      }
     yield ()
 
   def reserveEach[F[_]: Async: Logger: Parallel](
@@ -121,8 +126,8 @@ case class Query(config: QueryConfig):
     val reservePath = apiPath / "saveOrder"
     val reservePathWithParams =
       reservePath.withQueryParam("userid", reserveUserId)
-    val startTime = s"${reservationDate} ${config.vars.startTimeClock}"
-    val endTime = s"${reservationDate} ${config.vars.endTimeClock}"
+    val startTime = s"${reservationDate} ${config.vars.startTime}"
+    val endTime = s"${reservationDate} ${config.vars.endTime}"
     val req = Request[F](method = Method.POST, uri = reservePathWithParams)
       .withEntity(json"""{
                "customerEmail": "",
@@ -151,13 +156,13 @@ case class Query(config: QueryConfig):
     val endTime = startTime
     for
       courts <- getCourtList(queryUserId, gymId)
-      courtMap <- Monad[F].pure(
-        Map.from(courts.data.records.map(_.id).zip(courts.data.records))
+      courtMap = Map.from(
+        courts.data.records.map(_.id).zip(courts.data.records)
       )
-      timeSlots <- courts.data.records.map { r =>
+      timeSlots <- courts.data.records.parTraverse { r =>
         extractCourtTimeSlots(startTime, endTime, queryUserId, courtMap)(r.id)
-      }.parSequence
-      goodSlots <- Monad[F].pure(timeSlots.filter(s => s._2.length != 0))
+      }
+      goodSlots = timeSlots.filter(s => s._2.length != 0)
       _ <- sendNotification(startTime, goodSlots)
     yield ()
 
