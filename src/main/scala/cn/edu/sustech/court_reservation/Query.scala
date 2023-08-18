@@ -1,6 +1,6 @@
 package cn.edu.sustech.court_reservation
 
-import cats.effect.Async
+import cats.effect._
 import cats.syntax.all._
 import cats._
 
@@ -118,17 +118,13 @@ case class Query(config: QueryConfig):
   val courtListReqName = "getAppGroundPageByGymId"
   val courtTimeReqName = "getOrderTimeConfigList"
 
-  def reserve[F[_]: Async: Logger: Parallel](reservationDate: String)(using
+  def reserve[F[_]: Async: Logger: Parallel](
+      reservationDate: String,
+      targets: Seq[(String, String)]
+  )(using
       client: Client[F]
-  ): F[Stream[F, String]] =
-    for
-      courts <- getCourtList(queryUserId, gymId)
-      targets = courts.data.records
-        .filter { r =>
-          config.vars.targetCourts.contains(r.name)
-        }
-        .map { r => (r.name, r.id) }
-    yield Stream
+  ): Stream[F, String] =
+    Stream
       .emits(targets)
       .covary[F]
       .parEvalMapUnorderedUnbounded { t =>
@@ -141,6 +137,18 @@ case class Query(config: QueryConfig):
         }
       }
       .collectFirst { case Right(name) => name }
+
+  def getTarget[F[_]: Async: Logger: Parallel](reservationDate: String)(using
+      client: Client[F]
+  ): F[Seq[(String, String)]] =
+    for
+      courts <- getCourtList(queryUserId, gymId)
+      targets = courts.data.records
+        .filter { r =>
+          config.vars.targetCourts.contains(r.name)
+        }
+        .map { r => (r.name, r.id) }
+    yield targets
 
   def reserveEach[F[_]: Async: Logger: Parallel](
       reservationDate: String,

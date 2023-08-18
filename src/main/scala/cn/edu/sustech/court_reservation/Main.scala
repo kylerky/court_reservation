@@ -99,7 +99,9 @@ object Main extends IOApp:
     )
     val reserveInstant =
       reserveTime.toInstant(ZoneOffset.ofHours(config.vars.zoneOffsetOfHours))
+    val query = Query(config)
     for
+      targets <- query.getTarget[IO](targetDay.show)
       now <- IO(Instant.now)
       sleepDuration = java.time.Duration
         .between(now, reserveInstant)
@@ -110,7 +112,7 @@ object Main extends IOApp:
         .covary[IO]
         .parEvalMapUnordered(config.vars.repeatCount) { t =>
           Temporal[IO].sleep(t + sleepDuration) *>
-            Query(config).reserve[IO](targetDay.show)
+            query.reserve[IO](targetDay.show, targets).pure[IO]
         }
         .flatten
         .take(1)
