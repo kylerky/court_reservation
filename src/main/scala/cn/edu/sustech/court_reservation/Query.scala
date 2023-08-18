@@ -11,7 +11,9 @@ import org.http4s._
 import org.http4s.implicits._
 import org.http4s.headers.Accept
 import org.http4s.circe._
+
 import fs2.io.net.Network
+import fs2.Stream
 
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.syntax._
@@ -22,6 +24,8 @@ import io.circe.syntax._
 import io.circe.literal._
 import scala.util.Try
 import scala.util.Success
+import cats.effect.kernel.MonadCancel
+import scala.util.control.NonFatal
 
 case class Response[T](
     code: Int,
@@ -116,7 +120,7 @@ case class Query(config: QueryConfig):
 
   def reserve[F[_]: Async: Logger: Parallel](reservationDate: String)(using
       client: Client[F]
-  ): F[Either[String, Unit]] =
+  ): F[Stream[F, String]] =
     for
       courts <- getCourtList(queryUserId, gymId)
       targets = courts.data.records
@@ -124,19 +128,19 @@ case class Query(config: QueryConfig):
           config.vars.targetCourts.contains(r.name)
         }
         .map { r => (r.name, r.id) }
-      nameResRev <- targets.parFoldMapA { t =>
-        reserveEach(reservationDate, t._1, t._2).attempt.map {
-          _.swap.map { List(_) }
+    yield Stream
+      .emits(targets)
+      .covary[F]
+      .parEvalMapUnorderedUnbounded { t =>
+        reserveEach(reservationDate, t._1, t._2).attempt.flatMap {
+          case Left(e) =>
+            Async[F].raiseUnless(NonFatal(e))(e)
+              *> error"$e"
+              *> e.asLeft.pure[F]
+          case Right(name) => name.asRight.pure[F]
         }
       }
-      nameRes <- nameResRev.swap match
-        case Left(errs) =>
-          errs.traverse { e => warn"$e" } *> Async[F].raiseError(
-            FailToReserveError()
-          )
-        case Right(value) => value.pure[F]
-      _ <- info"Reserved $nameRes"
-    yield Left(nameRes)
+      .collectFirst { case Right(name) => name }
 
   def reserveEach[F[_]: Async: Logger: Parallel](
       reservationDate: String,

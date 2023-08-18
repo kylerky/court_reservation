@@ -4,6 +4,8 @@ import cats.effect.{IO, IOApp, ExitCode, Temporal}
 import cats.syntax.all._
 import org.typelevel.log4cats.slf4j._
 import org.typelevel.log4cats._
+import org.typelevel.log4cats.Logger
+import org.typelevel.log4cats.syntax._
 import org.typelevel.cats.time._
 
 import java.time._
@@ -63,7 +65,7 @@ object Main extends IOApp:
       isQuery <- args.get(0).getOrElse("-q") match {
         case "-q" => true.pure[IO]
         case "-r" => false.pure[IO]
-        case o    => IO.raiseError(RuntimeException(s"unknown option ${o}"))
+        case o    => IO.raiseError(RuntimeException(s"Unknown option ${o}"))
       }
       daysToPlus <- args.get(1) match {
         case Some(days) => IO.fromTry(Try(days.toInt))
@@ -97,14 +99,25 @@ object Main extends IOApp:
     )
     val reserveInstant =
       reserveTime.toInstant(ZoneOffset.ofHours(config.vars.zoneOffsetOfHours))
-    val sleepDuration =
-      java.time.Duration
-        .between(Instant.now, reserveInstant)
+    for
+      now <- IO(Instant.now)
+      sleepDuration = java.time.Duration
+        .between(now, reserveInstant)
         .toNanos()
         .nanos + config.vars.reserveClockOffsetInMillis.millis
-    repeatOffsets
-      .parFoldMapA { t =>
-        Temporal[IO].sleep(t + sleepDuration) *>
-          Query(config).reserve[IO](targetDay.show)
-      }
-      .as(())
+      _ <- Stream
+        .emits(repeatOffsets)
+        .covary[IO]
+        .parEvalMapUnordered(config.vars.repeatCount) { t =>
+          Temporal[IO].sleep(t + sleepDuration) *>
+            Query(config).reserve[IO](targetDay.show)
+        }
+        .flatten
+        .take(1)
+        .compile
+        .last
+        .flatMap {
+          case None       => info"Fail to reserve a court"
+          case Some(name) => info"Reserved $name"
+        }
+    yield ()
