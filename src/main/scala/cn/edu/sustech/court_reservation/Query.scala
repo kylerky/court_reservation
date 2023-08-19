@@ -120,13 +120,11 @@ case class Query(config: QueryConfig):
 
   def reserve[F[_]: Async: Logger: Parallel](
       reservationDate: String,
-      targets: Seq[(String, String)]
+      targets: Stream[F, (String, String)]
   )(using
       client: Client[F]
   ): Stream[F, String] =
-    Stream
-      .emits(targets)
-      .covary[F]
+    targets
       .parEvalMapUnorderedUnbounded { t =>
         reserveEach(reservationDate, t._1, t._2).attempt.flatMap {
           case Left(e) =>

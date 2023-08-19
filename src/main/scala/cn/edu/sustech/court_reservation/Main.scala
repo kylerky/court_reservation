@@ -97,24 +97,29 @@ object Main extends IOApp:
         config.vars.reserveSecond
       )
     )
+    val maxPar = 5
     val reserveInstant =
       reserveTime.toInstant(ZoneOffset.ofHours(config.vars.zoneOffsetOfHours))
     val query = Query(config)
     for
       targets <- query.getTarget[IO](targetDay.show)
-      now <- IO(Instant.now)
-      sleepDuration = java.time.Duration
-        .between(now, reserveInstant)
-        .toNanos()
-        .nanos + config.vars.reserveClockOffsetInMillis.millis
       _ <- Stream
         .emits(repeatOffsets)
         .covary[IO]
-        .parEvalMapUnordered(config.vars.repeatCount) { t =>
-          Temporal[IO].sleep(t + sleepDuration) *>
-            query.reserve[IO](targetDay.show, targets).pure[IO]
+        .parEvalMap(maxPar) { t =>
+          IO(Instant.now)
+            .map { now =>
+              val sleepDuration = java.time.Duration
+                .between(now, reserveInstant)
+                .toNanos()
+                .nanos + config.vars.reserveClockOffsetInMillis.millis
+              query.reserve[IO](
+                targetDay.show,
+                Stream.emits(targets).delayBy(sleepDuration)
+              )
+            }
         }
-        .flatten
+        .parJoin(maxPar)
         .take(1)
         .compile
         .last
