@@ -101,6 +101,7 @@ case class QueryConfigVars(
     startTime: String,
     endTime: String,
     enableMessageHook: Boolean,
+    minSlotsToMessage: Int,
     emptyResultSend: Boolean,
     emptyResultMessage: String,
     defaultDaysToPlus: Int
@@ -194,7 +195,9 @@ case class Query(config: QueryConfig):
       timeSlots <- courts.data.records.parTraverse { r =>
         extractCourtTimeSlots(startDate, endDate, queryUserId, courtMap)(r.id)
       }
-      goodSlots = timeSlots.filter(s => s._2.length != 0)
+      goodSlots = timeSlots.filter(s =>
+        s._2.length >= config.vars.minSlotsToMessage
+      )
       _ <-
         if config.vars.enableMessageHook then
           sendNotification(startDate, goodSlots)
