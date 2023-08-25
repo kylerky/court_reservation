@@ -102,6 +102,7 @@ case class QueryConfigVars(
     endTime: String,
     enableMessageHook: Boolean,
     minSlotsToMessage: Int,
+    queryCourtBlackList: Set[String],
     emptyResultSend: Boolean,
     emptyResultMessage: String,
     defaultDaysToPlus: Int
@@ -189,10 +190,13 @@ case class Query(config: QueryConfig):
     val endDate = startDate
     for
       courts <- getCourtList(queryUserId, gymId)
+      records = courts.data.records.filter { r =>
+        !config.vars.queryCourtBlackList.contains(r.name)
+      }
       courtMap = Map.from(
-        courts.data.records.map(_.id).zip(courts.data.records)
+        records.map { _.id }.zip(records)
       )
-      timeSlots <- courts.data.records.parTraverse { r =>
+      timeSlots <- records.parTraverse { r =>
         extractCourtTimeSlots(startDate, endDate, queryUserId, courtMap)(r.id)
       }
       goodSlots = timeSlots.filter(s =>
