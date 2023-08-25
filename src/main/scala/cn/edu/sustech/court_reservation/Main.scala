@@ -97,7 +97,6 @@ object Main extends IOApp:
         config.vars.reserveSecond
       )
     )
-    val maxPar = 5
     val reserveInstant =
       reserveTime.toInstant(ZoneOffset.ofHours(config.vars.zoneOffsetOfHours))
     val query = Query(config)
@@ -106,7 +105,7 @@ object Main extends IOApp:
       _ <- Stream
         .emits(repeatOffsets)
         .covary[IO]
-        .parEvalMap(maxPar) { t =>
+        .parEvalMapUnbounded { t =>
           IO(Instant.now)
             .map { now =>
               val sleepDuration = java.time.Duration
@@ -119,7 +118,7 @@ object Main extends IOApp:
               )
             }
         }
-        .parJoin(maxPar)
+        .parJoinUnbounded
         .take(1)
         .compile
         .last
