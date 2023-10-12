@@ -128,14 +128,22 @@ case class Query(config: QueryConfig):
   ): Stream[F, String] =
     targets
       .parEvalMapUnorderedUnbounded { t =>
-        reserveEach(reservationDate, t._1, t._2).attempt.flatMap {
-          case Left(e) =>
-            Async[F].raiseUnless(NonFatal(e))(e)
-              *> error"$e"
-              *> e.asLeft.pure[F]
-          case Right(name) => name.asRight.pure[F]
-        }
+        reserveEach(
+          reservationDate,
+          t._1,
+          t._2,
+          { r =>
+            error"Got an error code: ${r.status}"
+              *> r
+                .as[Response[Option[Unit]]]
+                .flatMap { r => error"Got the message: ${r.msg}" }
+              *> RuntimeException(
+                "Error when reserving a court"
+              ).pure
+          }
+        )
       }
+      .attempt
       .collectFirst { case Right(name) => name }
 
   def getTarget[F[_]: Async: Logger: Parallel](reservationDate: String)(using
@@ -153,7 +161,8 @@ case class Query(config: QueryConfig):
   def reserveEach[F[_]: Async: Logger: Parallel](
       reservationDate: String,
       courtName: String,
-      courtId: String
+      courtId: String,
+      handleError: org.http4s.Response[F] => F[Throwable]
   )(using
       client: Client[F]
   ): F[String] =
@@ -182,7 +191,9 @@ case class Query(config: QueryConfig):
                "orderDate": ${startTime},
                "tmpOrderDate": ${startTime},
                "userNum": ${config.vars.userNum}}""")
-    client.expect[Response[ReservationResponseData]](req).as(courtName)
+    client
+      .expectOr[Response[ReservationResponseData]](req) { handleError(_) }
+      .as(courtName)
 
   def query[F[_]: Async: Logger: Parallel](startDate: String)(using
       client: Client[F]
@@ -204,7 +215,17 @@ case class Query(config: QueryConfig):
       )
       _ <-
         if config.vars.enableMessageHook then
-          sendNotification(startDate, goodSlots)
+          sendNotification[F](
+            startDate,
+            goodSlots,
+            { r =>
+              error"Got an error code: ${r.status}"
+                *> r.bodyText.evalMap { r => error"$r" }.compile.drain
+                *> RuntimeException(
+                  "Error in sending Feishu notification"
+                ).pure
+            }
+          )
         else ().pure[F]
     yield ()
 
@@ -282,7 +303,8 @@ case class Query(config: QueryConfig):
 
   def sendNotification[F[_]: Async](
       startDate: String,
-      slots: Seq[(CourtInfo, Seq[TimeSlot])]
+      slots: Seq[(CourtInfo, Seq[TimeSlot])],
+      handleError: org.http4s.Response[F] => F[Throwable]
   )(using client: Client[F]): F[Unit] =
     val prelude =
       s"${startDate} ${config.vars.goodFirstHour}-${config.vars.goodLastHour}\n"
@@ -301,4 +323,4 @@ case class Query(config: QueryConfig):
       method = Method.POST,
       uri = config.messageHookUri
     ).withEntity(json"""{"message": ${message}}""")
-    client.expect[Unit](req)
+    client.expectOr[Unit](req) { handleError(_) }
